@@ -8,11 +8,15 @@ RUN apt-get update && apt-get install -y \
     texlive-latex-extra \
     python3 \
     python3-pip \
-    pdf2htmlex
+    pdf2htmlex \
+    poppler-utils \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install pypandoc pdfminer.six fastapi uvicorn
+WORKDIR /app
+COPY . /app
 
-WORKDIR /workspace
-COPY . /workspace
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-CMD ["bash"]
+EXPOSE 8000
+
+CMD ["uvicorn", "xformat.api:app", "--host", "0.0.0.0", "--port", "8000"]

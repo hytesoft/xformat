@@ -1,0 +1,6 @@
+requests
+beautifulsoup4
+# 你还需要根据实际用到的后端补充如：
+pypandoc
+pdfminer.six
+# 以及其它依赖
