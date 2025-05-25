@@ -36,20 +36,26 @@ async def convert_text_api(
     """
     try:
         result = convert_text(content, from_format, to_format)
-        return PlainTextResponse(result)
+        return JSONResponse({"result": result})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
 @app.get("/convert_url")
 async def convert_url_api(
     url: str = Query(...),
-    to_format: str = Query(...)
+    to_format: str = Query(...),
+    proxy: str = Query(None)
 ):
     """
-    URL 网页内容转换接口
+    URL 网页内容转换接口，支持代理和状态标识
     """
     try:
-        result = convert_url(url, to_format)
-        return PlainTextResponse(result)
+        flag, result = convert_url(url, to_format, proxy)
+        return JSONResponse({
+            "url": url,
+            "to_format": to_format,
+            "flag": flag,
+            "result": result
+        })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)

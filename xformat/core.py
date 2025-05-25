@@ -2,6 +2,7 @@ import os
 from .backends import convert_with_pandoc, pdf_to_txt, pdf_to_html
 import requests
 from bs4 import BeautifulSoup
+import time
 
 SUPPORTED_FORMATS = ['md', 'markdown', 'pdf', 'html', 'txt', 'pptx']
 
@@ -93,29 +94,63 @@ def convert_text(input_text, from_format, to_format):
     else:
         raise NotImplementedError(f"convert_text 仅支持 pandoc 文本格式转换")
 
-def convert_url(url, to_format):
+def convert_url(url, to_format, proxy=None):
     """
     从URL抓取网页，去除body、br、div、span、css等元素和样式，转换为指定格式字符串
+    支持代理和重试，返回 flag 标识
     :param url: 网页URL
     :param to_format: 目标格式（如 txt, md, html）
-    :return: 转换后的字符串内容
+    :param proxy: 代理地址（可选）
+    :return: (flag, result)
+    flag: 0-直连成功，1-代理成功，2-代理失败
     """
-    resp = requests.get(url)
-    resp.encoding = resp.apparent_encoding
-    html = resp.text
+    session = requests.Session()
+    timeout = 10
+    # 1. 直连尝试
+    for i in range(3):
+        try:
+            resp = session.get(url, timeout=timeout)
+            resp.encoding = resp.apparent_encoding
+            html = resp.text
+            flag = 0
+            break
+        except Exception:
+            if i == 2:
+                html = None
+    else:
+        html = None
+    # 2. 代理尝试
+    if html is None and proxy:
+        proxies = {"http": proxy, "https": proxy}
+        for i in range(3):
+            try:
+                resp = session.get(url, timeout=timeout, proxies=proxies)
+                resp.encoding = resp.apparent_encoding
+                html = resp.text
+                flag = 1
+                break
+            except Exception:
+                if i == 2:
+                    html = None
+        else:
+            html = None
+    # 3. 失败
+    if html is None:
+        flag = 2
+        return flag, ""
+    # 4. 清洗 html
     soup = BeautifulSoup(html, 'html.parser')
-    # 移除指定标签
     for tag in soup(['body', 'br', 'div', 'span', 'style', 'script', 'link']):
         tag.decompose()
-    # 移除所有标签的style属性
     for tag in soup.find_all(True):
         if 'style' in tag.attrs:
             del tag.attrs['style']
     clean_html = str(soup)
-    # 只保留文本格式转换
+    # 5. 转换格式
     if to_format in ('txt', 'md', 'markdown'):
-        return convert_text(clean_html, 'html', to_format)
+        result = convert_text(clean_html, 'html', to_format)
     elif to_format == 'html':
-        return clean_html
+        result = clean_html
     else:
-        raise NotImplementedError(f"convert_url 仅支持 html/txt/md 格式，收到: {to_format}")
+        result = ""
+    return flag, result
