@@ -1,0 +1,3 @@
+# 全局配置文件
+public_dir: /home/jj/docker/public_data
+output_json: ./cache/file_list.json
