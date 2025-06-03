@@ -1,12 +1,15 @@
-from airflow import DAG
-from airflow.operators.python import PythonOperator, BranchPythonOperator
-from datetime import datetime
+# 保证本地模块可被导入
 import sys
 import yaml
 import mimetypes
+import os
 
-# 保证本地模块可被导入
-sys.path.append('.')
+# 加载全局配置
+with open('config/config.yaml', 'r') as f:
+    _config = yaml.safe_load(f)
+PUBLIC_DIR = _config.get('public_dir', './public')
+
+# 所有节点函数定义（scan_file_task、classify_file_task、segment_text_task、...、video_multimodal_understanding_task）全部保留
 
 def scan_file_task(**context):
     # 只处理单个文件，必须从 dag_run.conf 读取 input_file
@@ -17,9 +20,7 @@ def scan_file_task(**context):
     if not input_file:
         raise ValueError("input_file must be provided via dag_run.conf. No file to process.")
     # 输出路径
-    with open('config/config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
-    output_json = config.get("output_json", "./cache/file_list.json")
+    output_json = _config.get("output_json", os.path.join(PUBLIC_DIR, "file_list.json"))
     from io_utils.file_scanner import scan_files
     scan_files(input_file, output_json)
 
@@ -72,7 +73,7 @@ def segment_text_task(**context):
     # 判断文件类型
     import mimetypes
     filetype, _ = mimetypes.guess_type(input_file)
-    output_path = "/mnt/share/out_text.json"  # 可根据实际挂载目录调整
+    output_path = os.path.join(PUBLIC_DIR, "out_text.json")  # 可根据实际挂载目录调整
     segments = []
     with open(input_file, 'r', encoding='utf-8') as f:
         lines = f.readlines()
@@ -111,7 +112,7 @@ def segment_pdf_task(**context):
     input_file = dag_run.conf.get('input_file') if dag_run and dag_run.conf else None
     if not input_file:
         raise ValueError("input_file must be provided via dag_run.conf.")
-    output_path = "/mnt/share/out_pdf.json"  # 可根据实际挂载目录调整
+    output_path = os.path.join(PUBLIC_DIR, "out_pdf.json")  # 可根据实际挂载目录调整
     doc = fitz.open(input_file)
     segments = []
     for page_num in range(len(doc)):
@@ -123,7 +124,7 @@ def segment_pdf_task(**context):
             base_image = doc.extract_image(xref)
             image_bytes = base_image["image"]
             image_ext = base_image["ext"]
-            image_filename = f"/mnt/share/pdf_page{page_num+1}_img{img_index+1}.{image_ext}"
+            image_filename = os.path.join(PUBLIC_DIR, f"pdf_page{page_num+1}_img{img_index+1}.{image_ext}")
             with open(image_filename, "wb") as img_f:
                 img_f.write(image_bytes)
             images.append(image_filename)
@@ -144,7 +145,7 @@ def segment_word_task(**context):
     input_file = dag_run.conf.get('input_file') if dag_run and dag_run.conf else None
     if not input_file:
         raise ValueError("input_file must be provided via dag_run.conf.")
-    output_path = "/mnt/share/out_word.json"
+    output_path = os.path.join(PUBLIC_DIR, "out_word.json")
     doc = Document(input_file)
     segments = []
     img_idx = 0
@@ -175,7 +176,7 @@ def segment_ppt_task(**context):
     input_file = dag_run.conf.get('input_file') if dag_run and dag_run.conf else None
     if not input_file:
         raise ValueError("input_file must be provided via dag_run.conf.")
-    output_path = "/mnt/share/out_ppt.json"
+    output_path = os.path.join(PUBLIC_DIR, "out_ppt.json")
     prs = Presentation(input_file)
     segments = []
     img_idx = 0
@@ -206,7 +207,7 @@ def segment_excel_task(**context):
     input_file = dag_run.conf.get('input_file') if dag_run and dag_run.conf else None
     if not input_file:
         raise ValueError("input_file must be provided via dag_run.conf.")
-    output_path = "/mnt/share/out_excel.json"
+    output_path = os.path.join(PUBLIC_DIR, "out_excel.json")
     xls = pd.ExcelFile(input_file)
     segments = []
     idx = 0
@@ -239,7 +240,7 @@ def segment_audio_task(**context):
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     segment_seconds = config.get('audio_segment_seconds', 30)
-    output_dir = '/mnt/share/'
+    output_dir = PUBLIC_DIR
     output_json = os.path.join(output_dir, 'out_audio.json')
     audio = AudioSegment.from_file(input_file)
     duration_sec = len(audio) / 1000
@@ -262,61 +263,59 @@ def segment_audio_task(**context):
     print(f"Segmented audio into {num_segments} segments, config seconds={segment_seconds}, output: {output_json}")
 
 def segment_video_task(**context):
-    import os, json
-    import yaml
-    import cv2
-    import tempfile
-    import subprocess
+    import os, json, yaml, cv2, subprocess
     dag_run = context.get('dag_run')
     input_file = dag_run.conf.get('input_file') if dag_run and dag_run.conf else None
     if not input_file:
         raise ValueError("input_file must be provided via dag_run.conf.")
-    # 读取配置
     config_path = os.path.join(os.path.dirname(__file__), 'config/config.yaml')
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
-    output_dir = '/mnt/share/'
+    output_dir = PUBLIC_DIR
     output_json = os.path.join(output_dir, 'out_video.json')
     cap = cv2.VideoCapture(input_file)
     if not cap.isOpened():
         raise RuntimeError(f"无法打开视频文件: {input_file}")
-    # 获取视频帧率
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    min_gap_sec = config.get('video_keyframe_min_gap', 3)  # 建议3-5秒，防止碎片化
+    min_gap_frames = int(fps * min_gap_sec)
+    diff_threshold = config.get('video_keyframe_diff', 0.03)
+    force_segment_sec = config.get('video_force_segment_sec', 10)  # 建议8-15秒，防止碎片化
+    force_segment_frames = int(fps * force_segment_sec)
     segments = []
     idx = 0
-    last_hist = None
-    frame_id = 0
-    keyframe_gap = config.get('video_keyframe_min_gap', 10)
-    last_keyframe = -keyframe_gap
-    last_keyframe_time = 0.0
     video_basename = os.path.splitext(os.path.basename(input_file))[0]
+    frame_id = 0
+    last_hist = None
+    last_keyframe = -min_gap_frames
+    last_keyframe_time = 0.0
+    last_forced = 0
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        # 计算当前帧的直方图
         hist = cv2.calcHist([cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)], [0], None, [256], [0,256])
         hist = cv2.normalize(hist, hist).flatten()
         is_keyframe = False
+        # 内容变化判定
         if last_hist is not None:
             diff = cv2.compareHist(hist, last_hist, cv2.HISTCMP_BHATTACHARYYA)
-            if diff > 0.5 and (frame_id - last_keyframe) >= keyframe_gap:
+            if diff > diff_threshold and (frame_id - last_keyframe) >= min_gap_frames:
                 is_keyframe = True
         else:
+            is_keyframe = True  # 第一帧
+        # 强制分段兜底
+        if (frame_id - last_forced) >= force_segment_frames:
             is_keyframe = True
+            last_forced = frame_id
         if is_keyframe:
             img_path = os.path.join(output_dir, f'{video_basename}_keyframe_{idx+1}.jpg')
             cv2.imwrite(img_path, frame)
-            # 计算关键帧时间（秒）
             keyframe_time = frame_id / fps if fps else 0.0
-            # 音频切片（取上一个关键帧到当前关键帧的音频）
-            if idx == 0:
-                audio_start = 0.0
-            else:
-                audio_start = last_keyframe_time
+            audio_start = last_keyframe_time
             audio_end = keyframe_time
             audio_path = os.path.join(output_dir, f'{video_basename}_audio_{idx+1}.wav')
-            # 用 ffmpeg 提取音频片段
             if audio_end > audio_start + 0.1:
                 cmd = [
                     'ffmpeg', '-y', '-i', input_file,
@@ -344,7 +343,7 @@ def segment_video_task(**context):
     cap.release()
     with open(output_json, 'w', encoding='utf-8') as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
-    print(f"Extracted {len(segments)} keyframes+audio to {output_json}")
+    print(f"Extracted {len(segments)} segments (内容变化+兜底每{force_segment_sec}秒) to {output_json}")
 
 def audio_asr_and_refine_task(**context):
     import os, json
@@ -352,7 +351,7 @@ def audio_asr_and_refine_task(**context):
     import tempfile
     dag_run = context.get('dag_run')
     # 读取分段音频json
-    audio_json = '/mnt/share/out_audio.json'
+    audio_json = os.path.join(PUBLIC_DIR, 'out_audio.json')
     if not os.path.exists(audio_json):
         raise FileNotFoundError(f"{audio_json} not found")
     with open(audio_json, 'r', encoding='utf-8') as f:
@@ -391,7 +390,7 @@ def audio_asr_and_refine_task(**context):
         seg['text'] = refined_text
         refined_segments.append(seg)
     # 输出新json
-    output_json = '/mnt/share/out_audio_refined.json'
+    output_json = os.path.join(PUBLIC_DIR, 'out_audio_refined.json')
     with open(output_json, 'w', encoding='utf-8') as f:
         json.dump(refined_segments, f, ensure_ascii=False, indent=2)
     print(f"ASR+LLM refined audio segments written to {output_json}")
@@ -400,7 +399,7 @@ def video_multimodal_understanding_task(**context):
     import os, json, yaml
     dag_run = context.get('dag_run')
     # 读取视频分段json
-    video_json = '/mnt/share/out_video.json'
+    video_json = os.path.join(PUBLIC_DIR, 'out_video.json')
     if not os.path.exists(video_json):
         raise FileNotFoundError(f"{video_json} not found")
     with open(video_json, 'r', encoding='utf-8') as f:
@@ -454,85 +453,7 @@ def video_multimodal_understanding_task(**context):
         seg['text'] = asr_text
         refined_segments.append(seg)
     # 输出新json
-    output_json = '/mnt/share/out_video_multimodal.json'
+    output_json = os.path.join(PUBLIC_DIR, 'out_video_multimodal.json')
     with open(output_json, 'w', encoding='utf-8') as f:
         json.dump(refined_segments, f, ensure_ascii=False, indent=2)
     print(f"Video multimodal understanding results written to {output_json}")
-
-default_args = {
-    'owner': 'airflow',
-    'retries': 1,
-}
-
-with DAG(
-    dag_id="multimodal_pipeline",
-    default_args=default_args,
-    start_date=datetime(2024, 1, 1),
-    schedule_interval=None,
-    catchup=False,
-    description="多模态批量数据切分与识别主流程"
-) as dag:
-
-    scan_file = PythonOperator(
-        task_id="scan_file",
-        python_callable=scan_file_task
-    )
-
-    classify_file = BranchPythonOperator(
-        task_id="classify_file",
-        python_callable=classify_file_task
-    )
-
-    segment_text = PythonOperator(
-        task_id="segment_text",
-        python_callable=segment_text_task
-    )
-
-    segment_pdf = PythonOperator(
-        task_id="segment_pdf",
-        python_callable=segment_pdf_task
-    )
-
-    segment_word = PythonOperator(
-        task_id="segment_word",
-        python_callable=segment_word_task
-    )
-    segment_ppt = PythonOperator(
-        task_id="segment_ppt",
-        python_callable=segment_ppt_task
-    )
-    segment_excel = PythonOperator(
-        task_id="segment_excel",
-        python_callable=segment_excel_task
-    )
-
-    segment_audio = PythonOperator(
-        task_id="segment_audio",
-        python_callable=segment_audio_task
-    )
-
-    segment_video = PythonOperator(
-        task_id="segment_video",
-        python_callable=segment_video_task
-    )
-
-    audio_asr_and_refine = PythonOperator(
-        task_id="audio_asr_and_refine",
-        python_callable=audio_asr_and_refine_task
-    )
-
-    video_multimodal_understanding = PythonOperator(
-        task_id="video_multimodal_understanding",
-        python_callable=video_multimodal_understanding_task
-    )
-
-    scan_file >> classify_file
-    classify_file >> segment_text
-    classify_file >> segment_pdf
-    classify_file >> segment_word
-    classify_file >> segment_ppt
-    classify_file >> segment_excel
-    classify_file >> segment_audio
-    classify_file >> segment_video
-    segment_audio >> audio_asr_and_refine
-    segment_video >> video_multimodal_understanding

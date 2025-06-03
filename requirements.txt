@@ -1,6 +1,21 @@
 requests
 beautifulsoup4
-# 你还需要根据实际用到的后端补充如：
-pypandoc
-pdfminer.six
-# 以及其它依赖
+PyYAML
+PyMuPDF
+python-docx
+python-pptx
+pandas
+pydub
+opencv-python
+moviepy
+ffmpeg-python
+torch
+torchaudio
+librosa
+Pillow
+openai-whisper
+fastapi
+uvicorn
+rich
+python-multipart
+# 其它依赖可根据实际业务补充

@@ -1,3 +1,6 @@
 # 全局配置文件
 public_dir: /home/jj/docker/public_data
 output_json: ./cache/file_list.json
+video_keyframe_diff: 0.03 # 更低阈值，极致灵敏
+video_keyframe_min_gap: 3 # 最小间隔秒数，建议3-5，防止碎片化
+video_force_segment_sec: 10 # 强制兜底分段，建议8-15，防止碎片化
