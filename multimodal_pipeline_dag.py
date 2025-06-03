@@ -347,6 +347,7 @@ def audio_asr_and_refine_task(input_json, output_json=None, config_path=None):
     print(f"[ASR+LLM] 开始音频ASR识别与润色: {input_json}")
     """
     对音频分段json做ASR+LLM润色，输出新json。audio字段只保留ASR文本，不能识别则置空。text字段保持原样不动。
+    识别后自动将audio字段文本转为简体中文。
     """
     import os, json, yaml
     if not os.path.exists(input_json):
@@ -362,6 +363,13 @@ def audio_asr_and_refine_task(input_json, output_json=None, config_path=None):
         model = whisper.load_model(config.get('asr_model', 'base'))
     except Exception:
         model = None
+    # 新增：导入opencc进行繁转简
+    try:
+        from opencc import OpenCC
+        cc = OpenCC('t2s')
+        convert_to_simplified = lambda x: cc.convert(x)
+    except Exception:
+        convert_to_simplified = lambda x: x  # 若无opencc则原样返回
     refined_segments = []
     for seg in segments:
         audio_path = seg.get('audio')
@@ -373,6 +381,8 @@ def audio_asr_and_refine_task(input_json, output_json=None, config_path=None):
         try:
             result = model.transcribe(audio_path, language=config.get('asr_language', 'zh'))
             asr_text = result['text'].strip()
+            # 新增：ASR结果转为简体
+            asr_text = convert_to_simplified(asr_text)
         except Exception:
             asr_text = ''
         seg['audio'] = asr_text if asr_text else ''
@@ -571,6 +581,7 @@ def fuse_segments_to_text(json_path, output_path=None, use_llm=True, config=None
     """
     融合分段json的text/audio/image三个字段为一个字符串，可选用大模型进一步摘要/润色。
     - 只输出有意义的内容，彻底去除音频、图片等文件路径。
+    - 对image字段内容做全局去重，避免重复图片文本叠加。
     """
     import os, json
     import yaml
@@ -580,6 +591,7 @@ def fuse_segments_to_text(json_path, output_path=None, use_llm=True, config=None
     with open(json_path, 'r', encoding='utf-8') as f:
         segments = json.load(f)
     fused_list = []
+    seen_images = set()  # 全局已出现的image文本集合
     for seg in segments:
         # 只保留有意义的内容，不输出任何文件路径
         parts = []
@@ -591,15 +603,21 @@ def fuse_segments_to_text(json_path, output_path=None, use_llm=True, config=None
             audio_val = seg.get('audio')
             if audio_val and isinstance(audio_val, str) and not audio_val.lower().endswith(('.wav','.mp3','.m4a','.flac','.aac','.ogg')):
                 parts.append(audio_val.strip())
-            # image字段如为文字直接用，否则忽略
+            # image字段如为文字直接用，否则忽略，且全局去重
             image_val = seg.get('image')
             if image_val:
                 if isinstance(image_val, str) and image_val.strip() and not image_val.lower().endswith(('.jpg','.jpeg','.png','.bmp','.gif','.tiff')):
-                    parts.append(image_val.strip())
+                    img_txt = image_val.strip()
+                    if img_txt not in seen_images:
+                        parts.append(img_txt)
+                        seen_images.add(img_txt)
                 elif isinstance(image_val, list):
                     for img in image_val:
                         if isinstance(img, str) and img.strip() and not img.lower().endswith(('.jpg','.jpeg','.png','.bmp','.gif','.tiff')):
-                            parts.append(img.strip())
+                            img_txt = img.strip()
+                            if img_txt not in seen_images:
+                                parts.append(img_txt)
+                                seen_images.add(img_txt)
         if parts:
             fused_list.append("\n".join(parts))
     fused_text = "\n---\n".join(fused_list)

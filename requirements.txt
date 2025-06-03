@@ -20,4 +20,6 @@ requests
 beautifulsoup4
 pytesseract
 scenedetect[opencv]
+opencc-python-reimplemented
 # 保留必要依赖，移除transnetv2、scikit-image、imagehash等无用依赖
+# 用于音频ASR结果自动繁体转简体
