@@ -263,7 +263,9 @@ def segment_audio_task(**context):
     print(f"Segmented audio into {num_segments} segments, config seconds={segment_seconds}, output: {output_json}")
 
 def segment_video_task(**context):
-    import os, json, yaml, cv2, subprocess
+    import os, json, yaml, cv2, pytesseract
+    from skimage.metrics import structural_similarity as ssim
+    import numpy as np
     dag_run = context.get('dag_run')
     input_file = dag_run.conf.get('input_file') if dag_run and dag_run.conf else None
     if not input_file:
@@ -278,37 +280,40 @@ def segment_video_task(**context):
         raise RuntimeError(f"无法打开视频文件: {input_file}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    min_gap_sec = config.get('video_keyframe_min_gap', 3)  # 建议3-5秒，防止碎片化
+    min_gap_sec = config.get('video_keyframe_min_gap', 5)
     min_gap_frames = int(fps * min_gap_sec)
-    diff_threshold = config.get('video_keyframe_diff', 0.03)
-    force_segment_sec = config.get('video_force_segment_sec', 10)  # 建议8-15秒，防止碎片化
-    force_segment_frames = int(fps * force_segment_sec)
+    ssim_threshold = config.get('video_ssim_threshold', 0.96)  # SSIM越低变化越大，建议0.96~0.98
+    ocr_check_gap = config.get('video_ocr_check_gap', 5)  # 每隔多少帧做一次OCR
     segments = []
     idx = 0
     video_basename = os.path.splitext(os.path.basename(input_file))[0]
     frame_id = 0
-    last_hist = None
     last_keyframe = -min_gap_frames
     last_keyframe_time = 0.0
-    last_forced = 0
+    last_ssim_frame = None
+    last_ocr_text = None
+    last_hist = None
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        hist = cv2.calcHist([cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)], [0], None, [256], [0,256])
-        hist = cv2.normalize(hist, hist).flatten()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         is_keyframe = False
-        # 内容变化判定
-        if last_hist is not None:
-            diff = cv2.compareHist(hist, last_hist, cv2.HISTCMP_BHATTACHARYYA)
-            if diff > diff_threshold and (frame_id - last_keyframe) >= min_gap_frames:
+        # 1. SSIM判定
+        if last_ssim_frame is not None and (frame_id - last_keyframe) >= min_gap_frames:
+            score, _ = ssim(gray, last_ssim_frame, full=True)
+            if score < ssim_threshold:
                 is_keyframe = True
-        else:
-            is_keyframe = True  # 第一帧
-        # 强制分段兜底
-        if (frame_id - last_forced) >= force_segment_frames:
-            is_keyframe = True
-            last_forced = frame_id
+        # 2. OCR判定
+        ocr_text = None
+        if frame_id % ocr_check_gap == 0:
+            try:
+                ocr_text = pytesseract.image_to_string(frame, lang='chi_sim+eng').strip()
+            except Exception:
+                ocr_text = None
+            if last_ocr_text is not None and ocr_text and ocr_text != last_ocr_text and (frame_id - last_keyframe) >= min_gap_frames:
+                is_keyframe = True
+        # 只要SSIM或OCR任一变化就分段
         if is_keyframe:
             img_path = os.path.join(output_dir, f'{video_basename}_keyframe_{idx+1}.jpg')
             cv2.imwrite(img_path, frame)
@@ -316,7 +321,9 @@ def segment_video_task(**context):
             audio_start = last_keyframe_time
             audio_end = keyframe_time
             audio_path = os.path.join(output_dir, f'{video_basename}_audio_{idx+1}.wav')
+            # 音频提取
             if audio_end > audio_start + 0.1:
+                import subprocess
                 cmd = [
                     'ffmpeg', '-y', '-i', input_file,
                     '-ss', str(audio_start), '-to', str(audio_end),
@@ -338,12 +345,19 @@ def segment_video_task(**context):
             idx += 1
             last_keyframe = frame_id
             last_keyframe_time = keyframe_time
-        last_hist = hist
+            last_ssim_frame = gray
+            last_ocr_text = ocr_text
+        else:
+            # 只更新SSIM和OCR参考帧/文本
+            if last_ssim_frame is None:
+                last_ssim_frame = gray
+            if ocr_text is not None:
+                last_ocr_text = ocr_text
         frame_id += 1
     cap.release()
     with open(output_json, 'w', encoding='utf-8') as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
-    print(f"Extracted {len(segments)} segments (内容变化+兜底每{force_segment_sec}秒) to {output_json}")
+    print(f"[SSIM+OCR] Extracted {len(segments)} segments to {output_json}")
 
 def audio_asr_and_refine_task(**context):
     import os, json

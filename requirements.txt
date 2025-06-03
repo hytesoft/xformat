@@ -18,4 +18,8 @@ fastapi
 uvicorn
 rich
 python-multipart
+scikit-image
+pytesseract
 # 其它依赖可根据实际业务补充
+# opencv-python 已保留，如完全不用直方图/视频帧处理可移除，但建议保留
+# 如已不用直方图diff，可移除其它相关依赖
