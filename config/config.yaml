@@ -4,3 +4,9 @@ output_json: ./cache/file_list.json
 video_keyframe_diff: 0.03 # 更低阈值，极致灵敏
 video_keyframe_min_gap: 5 # 最小间隔秒数，建议3-5，防止碎片化
 video_force_segment_sec: 15 # 强制兜底分段，建议8-15，防止碎片化
+video_ssim_threshold: 0.98 # 提高阈值，提升对细微变化的敏感度
+video_ocr_check_gap: 5 # 每5帧做一次OCR，兼顾速度与灵敏度
+llm:
+  model: deepseek-r1:14b
+  base_url: http://192.168.3.27:11434/v1/chat/completions
+  api_key: ""

@@ -4,8 +4,10 @@ from fastapi.responses import JSONResponse
 from typing import Optional
 from pathlib import Path
 import shutil
-from pipeline import run_pipeline
+from multimodal_pipeline_dag import run_pipeline
 import yaml
+import uuid
+import time
 
 with open("config/config.yaml", "r") as f:
     config = yaml.safe_load(f)
@@ -29,47 +31,26 @@ def simple_type_detect(filename: str) -> str:
 
 app = FastAPI()
 
-@app.post("/upload")
-def upload_file(file: UploadFile = File(...)):
-    filename = file.filename or "uploaded_file"
-    save_path = str(PUBLIC_DIR / filename)
-    with open(save_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    file_type = simple_type_detect(filename)
-    return JSONResponse({
-        "filename": filename,
-        "saved_path": save_path,
-        "file_type": file_type
-    })
 
 @app.post("/process")
-def process_file(filename: str):
-    input_path = str(PUBLIC_DIR / filename)
-    if not os.path.exists(input_path):
-        return JSONResponse({"error": f"File not found: {input_path}"}, status_code=404)
-    try:
-        run_pipeline(input_path)
-        return JSONResponse({
-            "status": "success",
-            "input_file": filename,
-            "output_dir": "/mnt/share/",  # 或其它实际输出目录
-            "msg": "多模态处理已完成，请查看输出目录"
-        })
-    except Exception as e:
-        return JSONResponse({"status": "error", "msg": str(e)}, status_code=500)
-
-@app.post("/process_upload")
-def process_upload(file: UploadFile = File(...)):
-    filename = file.filename or "uploaded_file"
-    save_path = str(PUBLIC_DIR / filename)
+def process_file(file: UploadFile = File(...)):
+    # 上传即处理：保存文件、生成ID、自动run_pipeline
+    ts = time.strftime('%Y%m%d%H%M%S')
+    uniq = uuid.uuid4().hex[:8]
+    orig_filename = file.filename or "uploaded_file"
+    ext = orig_filename.rsplit('.', 1)[-1] if '.' in orig_filename else 'bin'
+    file_id = f"{ts}{uniq}"
+    new_filename = f"{file_id}.{ext}"
+    save_path = str(PUBLIC_DIR / new_filename)
     with open(save_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     try:
-        run_pipeline(save_path)
+        run_pipeline(file_id)
         return JSONResponse({
             "status": "success",
-            "input_file": filename,
-            "output_dir": "/mnt/share/",  # 或其它实际输出目录
+            "id": file_id,
+            "filename": new_filename,
+            "output_dir": str(PUBLIC_DIR),
             "msg": "多模态处理已完成，请查看输出目录"
         })
     except Exception as e:
