@@ -1,0 +1,46 @@
+# Python缓存和编译文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Git和文档
+.git/
+.gitignore
+*.md
+LICENSE
+README*
+
+# 测试、日志、notebook
+pytest.ini
+*.log
+*.ipynb
+
+# 临时/大文件/数据目录
+cache/
+public/
+public_data/
+.DS_Store
+
+# 常见大模型/图片/压缩包
+*.ckpt
+*.pt
+*.h5
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.tiff
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Python虚拟环境
+.venv/
+venv/
+ENV/
+
+# 只保留必要的代码、配置和依赖文件
